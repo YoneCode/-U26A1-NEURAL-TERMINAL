@@ -1,4 +1,4 @@
-# ⚡ NEURAL TERMINAL
+#-U26A1 NEURAL TERMINAL
 
 A live split-panel blockchain explorer for the [GenLayer Bradbury testnet](https://explorer-bradbury.genlayer.com).
 The left panel is an IDE-style terminal showing real transactions, validator state, epochs, and
