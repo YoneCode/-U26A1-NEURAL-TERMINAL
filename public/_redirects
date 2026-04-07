@@ -1,0 +1,6 @@
+# Cloudflare Pages proxy rules — mirrors the Vite dev-server proxy so the
+# production build can reach the GenLayer APIs without CORS errors.
+# Status 200 = transparent proxy (browser sees the response as same-origin).
+
+/bradbury-api/*  https://explorer-bradbury.genlayer.com/:splat  200
+/standard-api/*  https://explorer-api.testnet-chain.genlayer.com/:splat  200
