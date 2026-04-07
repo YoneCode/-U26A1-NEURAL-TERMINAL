@@ -2,7 +2,7 @@
 
 A live split-panel blockchain explorer for the [GenLayer Bradbury testnet](https://explorer-bradbury.genlayer.com).
 The left panel is an IDE-style terminal showing real transactions, validator state, epochs, and
-network analytics. The right panel is a full-bleed canvas where an IK creature — **Zahif** — hunts
+network analytics. The right panel is a full-bleed canvas where an IK creature — **⚡ Lizard** — hunts
 failed and rejected transactions rendered as colour-coded particles, writing every confirmed kill
 batch permanently to a GenLayer smart contract.
 
@@ -73,7 +73,7 @@ Every animation frame runs a three-phase `syncTxColors()` pass:
 3. **REFRESH** — active particles update their colour from the latest feed state, so a
    transaction moving from PENDING → FINALIZED changes colour in real time.
 
-Zahif is a 3-segment IK skeleton (`critter.follow(huntX, huntY)`) that smoothly tracks
+⚡ Lizard is a 3-segment IK skeleton (`critter.follow(huntX, huntY)`) that smoothly tracks
 the first particle whose colour appears in `HUNT_STATUS_COLORS` — the set of red and
 orange status colours associated with failed and rejected transactions. On contact
 (`distance < 45 px`), the particle's hash is added to `eatenTxsRef`, its position is
@@ -141,13 +141,13 @@ pressure from the burner wallet.
 
 **View:** `get_oracle()` → `{ threat_level, pending_count, validator_count, last_epoch, batch_multiplier }`
 
-**Explorer:** `https://explorer-bradbury.genlayer.com/address/<VITE_HUNT_ORACLE_ADDRESS>`
+**Explorer:** [explorer-bradbury.genlayer.com/address/0xe91b073066dE06901A831d2aE635Ab53BBFe866b](https://explorer-bradbury.genlayer.com/address/0xe91b073066dE06901A831d2aE635Ab53BBFe866b)
 
 ---
 
 ### `DragonLore.py` — AI Chronicles via GenLayer Consensus
 
-Each time Zahif clears a level milestone, an off-chain trigger calls `evolve(total_hunts,
+Each time ⚡ Lizard clears a level milestone, an off-chain trigger calls `evolve(total_hunts,
 current_level)`. The contract calls `gl.exec_prompt()` with a structured prompt asking a
 language model to produce a single terse system-log line reflecting the entity's current
 state. GenLayer validators each run the LLM call independently; the resulting text must
@@ -170,7 +170,7 @@ explicitly non-fatal — the previous chronicle is retained.
 
 **View:** `get_lore()` → `{ chronicle, evolution_count, last_milestone }`
 
-**Explorer:** `https://explorer-bradbury.genlayer.com/address/<VITE_DRAGON_LORE_ADDRESS>`
+**Explorer:** [explorer-bradbury.genlayer.com/address/0x843CE0aF3B63dbaF2449Fe8bDDf6902934eD4a94](https://explorer-bradbury.genlayer.com/address/0x843CE0aF3B63dbaF2449Fe8bDDf6902934eD4a94)
 
 ---
 
