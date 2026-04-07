@@ -333,6 +333,30 @@ html, body, #root {
   padding-right: 6px;
   animation: crumbBreath 3s ease-in-out infinite;
 }
+.stage-social {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.social-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+.social-link:hover { opacity: 1; }
+.social-icon {
+  width: 13px;
+  height: 13px;
+  fill: #e2e2e2;
+  display: block;
+}
+.social-link:hover .social-icon { fill: #ffffff; }
+
 .stage-label {
   font-size: var(--t-md);
   font-weight: 700;
