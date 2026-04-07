@@ -7,6 +7,15 @@
 #    keep them out of public history to reduce attack surface.
 contracts/deploy.py
 contracts/deploy_reptile.mjs
+contracts/deploy_safe.mjs
+
+# ── AI tool context files ──────────────────────────────────────────────────────
+.claude/
+.impeccable.md
+CLAUDE.md
+
+# ── This file itself ──────────────────────────────────────────────────────────
+.gitignore
 
 # ── Build output ──────────────────────────────────────────────────────────────
 dist/

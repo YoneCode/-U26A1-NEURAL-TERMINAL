@@ -1,14 +1,16 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import useGenLayer from './hooks/useGenLayer.js';
 import { useReptileRPG } from './hooks/useReptileRPG.js';
+import useMultiContract from './hooks/useMultiContract.js';
 import Dashboard from './components/Dashboard.jsx';
 import DragonHUD from './components/DragonHUD.jsx';
 import NeuralCanvas from './components/NeuralCanvas.jsx';
 import ReptileLogic from './components/ReptileLogic.jsx';
 import TxToast from './components/TxToast.jsx';
+import NeuralBootSequence from './components/NeuralBootSequence.jsx';
 
-const BATCH_SIZE    = 25;
-const RETRY_DELAY   = 30_000; // ms before a failed batch is eligible for retry
+const BASE_BATCH_SIZE = 25;   // base hunts per batch TX — scaled by oracle multiplier
+const RETRY_DELAY     = 30_000; // ms before a failed batch is eligible for retry
 
 // ── Error Boundary — catches rendering crashes without killing the whole app ──
 class ErrorBoundary extends React.Component {
@@ -56,7 +58,10 @@ class ErrorBoundary extends React.Component {
 }
 
 export default function App() {
-  const gl = useGenLayer();
+  const [isBooted, setIsBooted] = useState(false);
+  const handleBooted = useCallback(() => setIsBooted(true), []);
+  const gl  = useGenLayer();
+  const mc  = useMultiContract();
 
   // ── On-chain state hydration ───────────────────────────────────────────────
   // stats:     null (loading) | false (disconnected) | { soul_name, total_hunts, current_level }
@@ -121,6 +126,14 @@ export default function App() {
   const [toast, setToast]     = useState(null);
   const dismissToast          = useCallback(() => setToast(null), []);
 
+  // ── Dynamic batch size — scales BASE_BATCH_SIZE by oracle multiplier ────────
+  // oracle.batch_multiplier is in basis points (100 = 1×, 140 = 1.4×).
+  // Clamped to [BASE_BATCH_SIZE, 50] so a bad oracle value can't break the loop.
+  const BATCH_SIZE = Math.min(
+    50,
+    Math.max(BASE_BATCH_SIZE, Math.round(BASE_BATCH_SIZE * (mc.oracleData.batch_multiplier / 100)))
+  );
+
   // ── Batch threshold watcher ────────────────────────────────────────────────
   // Fires record_batch() each time liveEatenCount crosses a new BATCH_SIZE
   // multiple.  Uses the real write client (burner wallet) — no more stub.
@@ -163,6 +176,7 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {!isBooted && <NeuralBootSequence onDone={handleBooted} />}
       {/* ── Full-width void background — NeuralCanvas spans the entire app ── */}
       <div style={{
         position:      'absolute',
@@ -171,7 +185,7 @@ export default function App() {
         pointerEvents: 'none',
         overflow:      'hidden',
       }}>
-        <NeuralCanvas />
+        <NeuralCanvas txFeed={gl.txFeed} />
       </div>
 
       <ErrorBoundary className="panel-left">
@@ -192,7 +206,7 @@ export default function App() {
 
       <ErrorBoundary className="panel-right">
         {/* Right panel: canvas + HUD share the same stacking context */}
-        <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: 'transparent' }}>
+        <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'visible', background: 'transparent' }}>
 
           {/* Canvas + particle tooltip (zIndex 1 / 20) */}
           <ReptileLogic
@@ -207,6 +221,11 @@ export default function App() {
             liveEatenCount={liveEatenCount}
             chainStats={chainStats}
             syncState={syncState}
+            batchSize={BATCH_SIZE}
+            oracleData={mc.oracleData}
+            oracleStatus={mc.oracleStatus}
+            loreData={mc.loreData}
+            loreStatus={mc.loreStatus}
           />
 
           {/* TX toast — slides down from beneath the center section of the HUD.

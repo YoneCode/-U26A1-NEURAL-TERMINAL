@@ -11,10 +11,34 @@ const NODE_DEFS = [
   [0.95, 0.50],
 ];
 
-const MOCK_TXS = [{ id: 1, stageIdx: 2 }, { id: 2, stageIdx: 4 }];
+// Maximum node index (0-based). stageIdx values outside [0, NODE_DEFS.length-1]
+// are clamped so the canvas never references an undefined node.
+const MAX_NODE_IDX = NODE_DEFS.length - 1;
 
-// Pre-computed set of node indices that carry a TX pulse (yellow) — rest are cyan
-const TX_NODE_SET = new Set(MOCK_TXS.map(t => t.stageIdx));
+// Derive the set of pulse-active node indices from a live txFeed array.
+// Returns a Map<nodeIdx, statusColor> so each active node can be coloured
+// by its real on-chain status rather than a hardcoded yellow.
+function buildLivePulseMap(txFeed) {
+  const map = new Map();
+  if (!Array.isArray(txFeed)) return map;
+  for (const tx of txFeed) {
+    if (!tx) continue;
+    const idx = Math.min(MAX_NODE_IDX, Math.max(0, tx.stageIdx ?? 0));
+    // Error/failed tx → red pulse; in-progress → orange; accepted/finalized → green
+    const color = tx.isError
+      ? '#ff5252'
+      : (tx.stageIdx ?? 0) >= 4
+        ? '#69ff47'
+        : (tx.stageIdx ?? 0) >= 2
+          ? '#ffb300'
+          : '#ffe040';
+    // Higher-priority statuses overwrite lower ones for the same node slot
+    if (!map.has(idx) || (tx.stageIdx ?? 0) > (map.get(idx)?._stageIdx ?? 0)) {
+      map.set(idx, { color, _stageIdx: tx.stageIdx ?? 0 });
+    }
+  }
+  return map;
+}
 
 // ─── Math Utilities ──────────────────────────────────────────────────────────
 
@@ -59,22 +83,10 @@ function drawOrganicConnection(ctx, nodeA, nodeB, iA, iB) {
   const cp1 = { x: nodeA.x + dx * 0.33 + px * off1, y: nodeA.y + dy * 0.33 + py * off1 };
   const cp2 = { x: nodeA.x + dx * 0.67 + px * off2, y: nodeA.y + dy * 0.67 + py * off2 };
 
-  // Pass 1: wide diffused glow
-  ctx.save();
-  ctx.shadowColor = '#00e5ff';
-  ctx.shadowBlur = 24;
-  ctx.strokeStyle = 'rgba(0, 210, 255, 0.08)';
-  ctx.lineWidth = 8;
-  ctx.beginPath();
-  ctx.moveTo(nodeA.x, nodeA.y);
-  ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, nodeB.x, nodeB.y);
-  ctx.stroke();
-  ctx.restore();
-
-  // Pass 2: mid glow
+  // Pass 1: mid glow (wide glow pass removed — GPU shadowBlur reduction)
   ctx.save();
   ctx.shadowColor = '#00cfff';
-  ctx.shadowBlur = 10;
+  ctx.shadowBlur = 8;
   ctx.strokeStyle = 'rgba(0, 190, 255, 0.22)';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
@@ -83,10 +95,10 @@ function drawOrganicConnection(ctx, nodeA, nodeB, iA, iB) {
   ctx.stroke();
   ctx.restore();
 
-  // Pass 3: sharp core thread
+  // Pass 2: sharp core thread
   ctx.save();
   ctx.shadowColor = '#80f0ff';
-  ctx.shadowBlur = 4;
+  ctx.shadowBlur = 3;
   ctx.strokeStyle = 'rgba(160, 230, 255, 0.55)';
   ctx.lineWidth = 0.9;
   ctx.beginPath();
@@ -130,9 +142,8 @@ function drawDendrites(ctx, nodeA, nodeB, cp1, cp2, iA, iB) {
     // Opacity falls off toward both ends of the parent axon
     const alpha = Math.sin(Math.PI * t) * 0.45 * (0.5 + dRand(seed + 5) * 0.5);
 
+    // No shadowBlur on dendrites — opacity conveys depth without GPU overdraw
     ctx.save();
-    ctx.shadowColor = '#00cfff';
-    ctx.shadowBlur = 6;
     ctx.strokeStyle = `rgba(0, 170, 220, ${alpha})`;
     ctx.lineWidth = 0.75;
     ctx.beginPath();
@@ -226,17 +237,19 @@ function drawNucleus(ctx, node) {
 
 // ─── Draw: Pulse ────────────────────────────────────────────────────────────
 
-function drawPulse(ctx, node) {
+function drawPulse(ctx, node, pulseColor = '#ffe040') {
   const { x, y } = node;
+  // Derive halo/disc colours from the live status colour
+  const glowColor = pulseColor;
 
   // Outer energy halo
   ctx.save();
-  ctx.shadowColor = '#ffdd00';
-  ctx.shadowBlur = 45;
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = 35;
   const halo = ctx.createRadialGradient(x, y, 0, x, y, 44);
-  halo.addColorStop(0.0, 'rgba(255, 240,  80, 0.38)');
-  halo.addColorStop(0.4, 'rgba(255, 160,   0, 0.10)');
-  halo.addColorStop(1.0, 'rgba(  0,   0,   0, 0.00)');
+  halo.addColorStop(0.0, `${glowColor}60`);
+  halo.addColorStop(0.4, `${glowColor}1a`);
+  halo.addColorStop(1.0, 'rgba(0,0,0,0)');
   ctx.fillStyle = halo;
   ctx.beginPath();
   ctx.arc(x, y, 44, 0, Math.PI * 2);
@@ -245,13 +258,13 @@ function drawPulse(ctx, node) {
 
   // Core pulse disc
   ctx.save();
-  ctx.shadowColor = '#ffe040';
-  ctx.shadowBlur = 28;
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = 22;
   const disc = ctx.createRadialGradient(x, y, 0, x, y, 9);
-  disc.addColorStop(0.0, 'rgba(255, 255, 200, 1.00)');
-  disc.addColorStop(0.35,'rgba(255, 220,  55, 1.00)');
-  disc.addColorStop(0.75,'rgba(255, 120,   0, 0.70)');
-  disc.addColorStop(1.0, 'rgba(255,  60,   0, 0.00)');
+  disc.addColorStop(0.0, 'rgba(255, 255, 255, 1.00)');
+  disc.addColorStop(0.35, `${glowColor}ff`);
+  disc.addColorStop(0.75, `${glowColor}b3`);
+  disc.addColorStop(1.0, 'rgba(0,0,0,0)');
   ctx.fillStyle = disc;
   ctx.beginPath();
   ctx.arc(x, y, 9, 0, Math.PI * 2);
@@ -270,8 +283,10 @@ function drawPulse(ctx, node) {
 }
 
 // ─── Main Render ─────────────────────────────────────────────────────────────
+// livePulseMap: Map<nodeIdx, { color, _stageIdx }> derived from real txFeed.
+// Nodes not in the map render as quiet cyan nuclei.
 
-function render(canvas) {
+function render(canvas, livePulseMap) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width;
   const H = canvas.height;
@@ -299,25 +314,30 @@ function render(canvas) {
 
   // ── 3. Radar pings — drawn first so they sit behind the solid node cores ──
   nodes.forEach((node, i) => {
-    const color   = TX_NODE_SET.has(i) ? '#ffe040' : '#00e5ff';
-    const stagger = (i / nodes.length) * RADAR_MAX_R; // evenly phase-stagger per node
+    const entry   = livePulseMap.get(i);
+    const color   = entry ? entry.color : '#00e5ff';
+    const stagger = (i / nodes.length) * RADAR_MAX_R;
     drawRadarPing(ctx, node, color, stagger);
   });
 
   // ── 4. Nuclei (static — must not shrink/grow/pulse) ───────────────────────
   nodes.forEach((node) => drawNucleus(ctx, node));
 
-  // ── 5. Pulses ─────────────────────────────────────────────────────────────
-  MOCK_TXS.forEach(({ stageIdx }) => {
-    const node = nodes[stageIdx];
-    if (node) drawPulse(ctx, node);
+  // ── 5. Pulses — only on nodes that have a live transaction ─────────────────
+  livePulseMap.forEach(({ color }, nodeIdx) => {
+    const node = nodes[nodeIdx];
+    if (node) drawPulse(ctx, node, color);
   });
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export default function NeuralCanvas() {
-  const canvasRef = useRef(null);
+export default function NeuralCanvas({ txFeed }) {
+  const canvasRef  = useRef(null);
+  // Store txFeed in a ref so the rAF loop always reads the latest value
+  // without needing to restart the effect on every feed update.
+  const txFeedRef  = useRef(txFeed ?? []);
+  useEffect(() => { txFeedRef.current = txFeed ?? []; }, [txFeed]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -326,7 +346,8 @@ export default function NeuralCanvas() {
     let rafId;
 
     const loop = () => {
-      render(canvas);
+      const livePulseMap = buildLivePulseMap(txFeedRef.current);
+      render(canvas, livePulseMap);
       rafId = requestAnimationFrame(loop);
     };
 

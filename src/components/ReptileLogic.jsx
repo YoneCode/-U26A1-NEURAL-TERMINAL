@@ -80,10 +80,11 @@ export default function ReptileLogic({ txFeed, standardTxs, onEat }) {
     const headImg = new Image();
     let   headImgReady = false;
     headImg.onload = () => { headImgReady = true; };
-    headImg.src = '/genlayer.png';
+    headImg.src = '/genlayer-icon.png';
 
     // ── Input ──────────────────────────────────────────────────────────────────
-    var Input = { keys: [], mouse: { left: false, right: false, middle: false, x: canvas.width / 2, y: canvas.height / 2 } };
+    // Only mouse position and keyboard state are used; button booleans removed.
+    var Input = { keys: [], mouse: { x: canvas.width / 2, y: canvas.height / 2 } };
     for (var i = 0; i < 230; i++) { Input.keys.push(false); }
 
     const onKeyDown   = e => Input.keys[e.keyCode] = true;
@@ -115,7 +116,9 @@ export default function ReptileLogic({ txFeed, standardTxs, onEat }) {
       };
     }
 
-    const particles = Array.from({ length: PCFG.count }, () => makeParticle());
+    const particles = Array.from({ length: PCFG.count }, (_, _i) => makeParticle());
+    // Assign a stable numeric index to each particle for O(1) pair-key lookup.
+    particles.forEach((p, idx) => { p._idx = idx; });
 
     // ── Particle lifecycle: TTL-based mapping with clean expiry ───────────────
     //
@@ -229,39 +232,69 @@ export default function ReptileLogic({ txFeed, standardTxs, onEat }) {
       }
     }
 
+    // ── Grid-based spatial partition for O(n) drawLinks ─────────────────────
+    // Cell size = linkDist so only 9 neighbouring cells need checking per particle.
+    // This replaces the O(n²) nested loop (16,110 checks/frame at n=180) with
+    // an O(n × avg_neighbours) pass — visually identical, ~10× cheaper.
+    const CELL_SIZE = PCFG.linkDist;
+
+    function buildGrid() {
+      const grid = new Map();
+      for (const p of particles) {
+        const cx = Math.floor(p.x / CELL_SIZE);
+        const cy = Math.floor(p.y / CELL_SIZE);
+        const key = `${cx},${cy}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(p);
+      }
+      return grid;
+    }
+
     function drawLinks() {
       const mx  = Input.mouse.x;
       const my  = Input.mouse.y;
-      const n   = particles.length;
       const ld2 = PCFG.linkDist * PCFG.linkDist;
       const gd2 = PCFG.grabDist * PCFG.grabDist;
       ctx.lineWidth = PCFG.linkWidth;
-
       ctx.strokeStyle = '#ffffff';
 
-      for (let i = 0; i < n; i++) {
-        const a = particles[i];
+      const grid    = buildGrid();
+      const checked = new Set(); // avoid drawing a↔b twice
 
-        // Particle–particle links: alpha fades with distance
-        for (let j = i + 1; j < n; j++) {
-          const b  = particles[j];
-          const dx = a.x - b.x;
-          const dy = a.y - b.y;
-          const d2 = dx*dx + dy*dy;
-          if (d2 < ld2) {
-            const alpha = PCFG.lineMaxOpacity * (1.5 - Math.sqrt(d2) / PCFG.linkDist);
-            ctx.globalAlpha = alpha;
-            ctx.beginPath();
-            ctx.moveTo(a.x, a.y);
-            ctx.lineTo(b.x, b.y);
-            ctx.stroke();
+      for (const a of particles) {
+        const acx = Math.floor(a.x / CELL_SIZE);
+        const acy = Math.floor(a.y / CELL_SIZE);
+
+        // Check only the 9 surrounding cells (3×3 neighbourhood)
+        for (let dcx = -1; dcx <= 1; dcx++) {
+          for (let dcy = -1; dcy <= 1; dcy++) {
+            const neighbours = grid.get(`${acx + dcx},${acy + dcy}`);
+            if (!neighbours) continue;
+            for (const b of neighbours) {
+              if (b === a) continue;
+              // Use stable _idx for O(1) pair deduplication
+              const pairKey = a._idx < b._idx ? `${a._idx}-${b._idx}` : `${b._idx}-${a._idx}`;
+              if (checked.has(pairKey)) continue;
+              checked.add(pairKey);
+              const dx = a.x - b.x;
+              const dy = a.y - b.y;
+              const d2 = dx * dx + dy * dy;
+              if (d2 < ld2) {
+                const alpha = PCFG.lineMaxOpacity * (1.5 - Math.sqrt(d2) / PCFG.linkDist);
+                ctx.globalAlpha = alpha;
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.stroke();
+              }
+            }
           }
         }
 
         // Grab mode: mouse–particle links
         const mdx = a.x - mx;
         const mdy = a.y - my;
-        if (mdx*mdx + mdy*mdy < gd2) {
+        if (mdx * mdx + mdy * mdy < gd2) {
           ctx.globalAlpha = PCFG.lineMaxOpacity;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
@@ -281,10 +314,12 @@ export default function ReptileLogic({ txFeed, standardTxs, onEat }) {
       const cy    = e.clientY - rect.top;
       const toAdd = Math.min(PCFG.pushCount, MAX_PARTICLES - particles.length);
       for (let i = 0; i < toAdd; i++) {
-        particles.push(makeParticle(
+        const np = makeParticle(
           cx + (Math.random() - 0.5) * 10,
           cy + (Math.random() - 0.5) * 10,
-        ));
+        );
+        np._idx = particles.length;
+        particles.push(np);
       }
     };
     canvas.addEventListener('click', onClick);
@@ -616,9 +651,8 @@ export default function ReptileLogic({ txFeed, standardTxs, onEat }) {
     };
     loop();
 
-    // ── Resize — update canvas dimensions AND re-scatter particles immediately ─
-    // Without re-scattering, particles clump near old edges until the wrap-
-    // around logic naturally redistributes them (which can take many seconds).
+    // ── ResizeObserver — update canvas + re-scatter particles on size change ───
+    // Uses ResizeObserver instead of window 'resize' for accurate element sizing.
     const onResize = () => {
       canvas.width  = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
@@ -627,7 +661,8 @@ export default function ReptileLogic({ txFeed, standardTxs, onEat }) {
         p.y = Math.random() * canvas.height;
       }
     };
-    window.addEventListener('resize', onResize);
+    const ro = new ResizeObserver(onResize);
+    ro.observe(canvas);
 
     return () => {
       cancelAnimationFrame(rafId);
@@ -635,7 +670,7 @@ export default function ReptileLogic({ txFeed, standardTxs, onEat }) {
       document.removeEventListener('keydown',   onKeyDown);
       document.removeEventListener('keyup',     onKeyUp);
       document.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('resize',      onResize);
+      ro.disconnect();
     };
   }, []);
 

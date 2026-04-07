@@ -4,7 +4,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "set-burner":       "node --env-file=.env scripts/set_burner.mjs",
+    "deploy-contracts": "node --env-file=.env scripts/deploy_contracts.mjs",
+    "update-oracle":    "node --env-file=.env scripts/update_oracle.mjs"
   },
   "dependencies": {
     "genlayer-js": "^0.28.0",

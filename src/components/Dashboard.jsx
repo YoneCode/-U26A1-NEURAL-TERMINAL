@@ -145,10 +145,17 @@ function NeuralExpand({ tx }) {
     setRawSteps(null);
     (async () => {
       try {
-        const r = await fetch(
-          `${BRADBURY_API}/transactions/consensus-steps/${tx.hash}`,
-          { signal: AbortSignal.timeout(8000) }
-        );
+        const ctrl = new AbortController();
+        const tid  = setTimeout(() => ctrl.abort(), 8000);
+        let r;
+        try {
+          r = await fetch(
+            `${BRADBURY_API}/transactions/consensus-steps/${tx.hash}`,
+            { signal: ctrl.signal }
+          );
+        } finally {
+          clearTimeout(tid);
+        }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = await r.json();
         if (!cancelled) setRawSteps(Array.isArray(d) ? d : []);
@@ -1386,15 +1393,25 @@ export default function Dashboard({
       </div>
 
       {/* Tab bar */}
-      <div className="ide-tabs">
+      <div className="ide-tabs" role="tablist" aria-label="Neural Terminal tabs">
         {TABS.map(tab => (
-          <span
+          <button
             key={tab.id}
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            aria-controls={`tabpanel-${tab.id}`}
+            id={`tab-${tab.id}`}
             className={`ide-tab${activeTab === tab.id ? " ide-tab-active" : ""}`}
             onClick={() => setActiveTab(tab.id)}
+            onKeyDown={e => {
+              const ids = TABS.map(t => t.id);
+              const cur = ids.indexOf(tab.id);
+              if (e.key === 'ArrowRight') { e.preventDefault(); setActiveTab(ids[(cur + 1) % ids.length]); }
+              if (e.key === 'ArrowLeft')  { e.preventDefault(); setActiveTab(ids[(cur - 1 + ids.length) % ids.length]); }
+            }}
           >
             {tab.label}
-          </span>
+          </button>
         ))}
         <div className="ide-tab-filler" />
         <span className="ide-tab-info">
@@ -1409,7 +1426,12 @@ export default function Dashboard({
 
       {/* Content */}
       <ErrorBoundary key={activeTab}>
-        <div className="tab-content">
+        <div
+          className="tab-content"
+          role="tabpanel"
+          id={`tabpanel-${activeTab}`}
+          aria-labelledby={`tab-${activeTab}`}
+        >
           {activeTab === "stream"     && <CommandCenter txFeed={txFeed} standardTxs={standardTxs} standardDetails={standardDetails} />}
           {activeTab === "neural"     && <NeuralLogTerminal logs={logs} />}
           {activeTab === "validators" && <ValidatorRegistry networkValidators={networkValidators} />}

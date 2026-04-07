@@ -74,8 +74,9 @@ export function useReptileRPG() {
   const [stats,     setStats]     = useState(null);
   const [syncState, setSyncState] = useState('loading');
 
-  const hasDataRef = useRef(false); // true after first successful read
-  const mountedRef = useRef(true);
+  const hasDataRef     = useRef(false); // true after first successful read
+  const mountedRef     = useRef(true);
+  const batchInFlight  = useRef(false); // mutex: only one recordBatch at a time
 
   // ── Core read ─────────────────────────────────────────────────────────────
   const fetchStats = useCallback(async (isBackground = false) => {
@@ -126,18 +127,51 @@ export function useReptileRPG() {
     return null;
   }, []);
 
-  // ── Core write ────────────────────────────────────────────────────────────
+  // ── Silent read: fetches get_stats WITHOUT touching React state ─────────────────
+  // Used inside recordBatch so we can read the chain mid-write without
+  // triggering the transient 'synced' flash that a full fetchStats() causes.
+  const silentReadStats = useCallback(async () => {
+    const client = getReadClient();
+    if (!client || !REPTILE_CONTRACT_ADDRESS) return null;
+    try {
+      const result = await client.readContract({
+        address:      REPTILE_CONTRACT_ADDRESS,
+        functionName: 'get_stats',
+        args:         [],
+        leaderOnly:   true,
+      });
+      if (result && typeof result === 'object') {
+        return {
+          soul_name:     String(result.soul_name     ?? '(我愛羅)'),
+          total_hunts:   Number(result.total_hunts   ?? 0),
+          current_level: Number(result.current_level ?? 0),
+        };
+      }
+    } catch { /* ignore — caller handles null */ }
+    return null;
+  }, []);
+
+  // ── Core write ───────────────────────────────────────────────────────────────────────
   // Calls record_batch(amount) on the contract using the burner wallet.
   // GenLayer consensus can take 1–5 minutes to process a TX, so instead of
   // waiting for a receipt (which times out), we poll get_stats until
   // total_hunts increases, confirming on-chain acceptance.
+  //
+  // MUTEX: batchInFlight prevents concurrent invocations during the 8-min
+  // polling window — a second call while one is in-flight returns immediately.
   const recordBatch = useCallback(async (amount) => {
+    if (batchInFlight.current) {
+      console.warn(`[ReptileRPG] record_batch(${amount}) skipped — a batch write is already in flight.`);
+      return;
+    }
+
     const wc = getWriteClient();
     if (!wc || !REPTILE_CONTRACT_ADDRESS) {
       console.warn('[ReptileRPG] record_batch skipped: write client unavailable (check VITE_PLAYER_PRIVATE_KEY).');
       return;
     }
 
+    batchInFlight.current = true;
     setSyncState('writing');
     try {
       const hash = await wc.writeContract({
@@ -148,37 +182,62 @@ export function useReptileRPG() {
 
       console.log(`[ReptileRPG] record_batch(${amount}) TX sent: ${hash}`);
 
-      // Poll get_stats until total_hunts increases (confirms on-chain write).
+      // Poll get_stats silently (no state updates) until total_hunts increases.
       // GenLayer consensus takes 1–5 minutes, so we poll for up to 8 minutes.
-      const rc = getReadClient();
-      if (rc) {
-        const baseline = (await fetchStats(true))?.total_hunts ?? 0;
-        let confirmed = false;
-        for (let i = 0; i < 48 && mountedRef.current; i++) {
-          await new Promise(r => setTimeout(r, 10_000));
-          const cur = await fetchStats(true);
-          if (cur && cur.total_hunts > baseline) {
-            confirmed = true;
-            break;
-          }
-        }
-        if (confirmed) {
-          console.log(`[ReptileRPG] record_batch(${amount}) confirmed on-chain.`);
-          return hash;
+      const baseline = (await silentReadStats())?.total_hunts ?? 0;
+      let confirmed = false;
+      let confirmedStats = null;
+      for (let i = 0; i < 48 && mountedRef.current; i++) {
+        await new Promise(r => setTimeout(r, 10_000));
+        const cur = await silentReadStats();
+        if (cur && cur.total_hunts > baseline) {
+          confirmed = true;
+          confirmedStats = cur;
+          break;
         }
       }
 
+      if (confirmed && confirmedStats && mountedRef.current) {
+        console.log(`[ReptileRPG] record_batch(${amount}) confirmed on-chain.`);
+
+        // Commit confirmed stats to React state in one atomic update
+        setStats(confirmedStats);
+        setSyncState('synced');
+
+        // ── register_level_up: sync visual level to the ledger ────────────────
+        // Derive the canonical level the same way DragonHUD does (floor / 100).
+        const newLevel = Math.floor(confirmedStats.total_hunts / 100);
+        if (newLevel > confirmedStats.current_level) {
+          try {
+            await wc.writeContract({
+              address:      REPTILE_CONTRACT_ADDRESS,
+              functionName: 'register_level_up',
+              args:         [newLevel],
+            });
+            console.log(`[ReptileRPG] register_level_up(${newLevel}) TX sent.`);
+          } catch (le) {
+            // Non-fatal — level sync is cosmetic; batch is already confirmed
+            console.warn('[ReptileRPG] register_level_up failed (non-fatal):', le?.message ?? le);
+          }
+        }
+
+        return hash;
+      }
+
       // TX sent but not yet confirmed within the poll window.
-      // Return the hash anyway so App can show a toast; syncState set by fetchStats.
-      console.warn(`[ReptileRPG] record_batch(${amount}) TX sent but not yet confirmed within poll window.`);
+      // Do a full fetchStats so state reflects whatever the chain currently shows.
+      console.warn(`[ReptileRPG] record_batch(${amount}) TX sent but not confirmed within poll window.`);
+      if (mountedRef.current) await fetchStats(false);
       return hash;
     } catch (e) {
       if (!mountedRef.current) return;
       console.error('[ReptileRPG] record_batch failed:', e?.message ?? e);
       setSyncState('failed');
       throw e;
+    } finally {
+      batchInFlight.current = false;
     }
-  }, [fetchStats]);
+  }, [fetchStats, silentReadStats]);
 
   // ── Mount: initial fetch + 30 s auto-poll ─────────────────────────────────
   useEffect(() => {

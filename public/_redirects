@@ -1,6 +1,11 @@
-# Cloudflare Pages proxy rules — mirrors the Vite dev-server proxy so the
-# production build can reach the GenLayer APIs without CORS errors.
+# Netlify / Cloudflare Pages proxy rules — mirrors the Vite dev-server proxy
+# so the production build can reach the GenLayer APIs without CORS errors.
 # Status 200 = transparent proxy (browser sees the response as same-origin).
-
+#
+# BRADBURY_API = "/bradbury-api/api/v1" → strip prefix, keep /api/v1 path
 /bradbury-api/*  https://explorer-bradbury.genlayer.com/:splat  200
+# STANDARD_API  = "/standard-api" → strip prefix only
 /standard-api/*  https://explorer-api.testnet-chain.genlayer.com/:splat  200
+
+# SPA fallback — serve index.html for all non-asset routes
+/*  /index.html  200

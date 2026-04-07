@@ -22,9 +22,3 @@ export function getDominantModel(validators) {
   const dominantId = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b);
   return AI_MODELS.find(m => m.id === dominantId) || AI_MODELS[0];
 }
-
-export const VOTE_LABELS = {
-  ACCEPTED: { label: 'ACCEPTED', symbol: '✓', color: '#69ff47' },
-  REJECTED: { label: 'REJECTED', symbol: '✗', color: '#ff5252' },
-  PENDING:  { label: 'PENDING',  symbol: '…', color: '#888'    },
-};

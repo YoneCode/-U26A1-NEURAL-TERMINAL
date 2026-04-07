@@ -160,7 +160,11 @@ export default function useGenLayer() {
     try { return genBanner(); } catch { return []; }
   });
 
-  const seenHashes   = useRef(new Set());
+  // Sliding-window Map for seenHashes: key=hash, value=insertion-order counter.
+  // Evicts oldest entries by counter rather than splicing a Set, so pruned hashes
+  // are NOT re-injected on the next poll (fixes audit finding #8).
+  const seenHashes   = useRef(new Map());  // Map<hash, insertionOrder>
+  const seenCounter  = useRef(0);
   const watchHashRef = useRef(null);
   const lastStageRef = useRef({});
   const lastBlock    = useRef(0);
@@ -170,7 +174,8 @@ export default function useGenLayer() {
   const extraDetailCache   = useRef(new Map());   // hash → raw detail obj
   const detailFetchQueue   = useRef([]);           // hashes waiting to fetch
   const detailFetchRunning = useRef(false);        // in-flight guard
-  const seenDetailHashes   = useRef(new Set());   // hashes already queued/cached
+  const seenDetailHashes   = useRef(new Map());   // hash → insertionOrder (sliding window)
+  const seenDetailCounter  = useRef(0);
 
   const stage         = STAGES[pulseStageIdx] ?? STAGES[0];
   const targetSegment = stage.segment;
@@ -213,7 +218,15 @@ export default function useGenLayer() {
           }
         }
         if (Object.keys(newEntries).length > 0) {
-          setStandardDetails(prev => ({ ...prev, ...newEntries }));
+          setStandardDetails(prev => {
+            const merged = { ...prev, ...newEntries };
+            // Cap standardDetails state at 200 entries to prevent memory growth
+            const keys = Object.keys(merged);
+            if (keys.length <= 200) return merged;
+            const trimmed = {};
+            keys.slice(keys.length - 200).forEach(k => { trimmed[k] = merged[k]; });
+            return trimmed;
+          });
         }
         if (detailFetchQueue.current.length > 0) {
           await new Promise(res => setTimeout(res, 200));
@@ -256,9 +269,17 @@ export default function useGenLayer() {
       try {
         let entries = null;
 
-        // Attempt 1: Bradbury hidden API (full GenLayer data)
+        // Attempt 1: Bradbury API + real block head in parallel
         try {
-          const r = await fetchWithTimeout(`${BRADBURY_API}/transactions?page=1&page_size=50`, 8000);
+          const [r, bnHex] = await Promise.all([
+            fetchWithTimeout(`${BRADBURY_API}/transactions?page=1&page_size=50`, 8000),
+            rpcCall("eth_blockNumber").catch(() => null),
+          ]);
+          // Update block number from RPC head immediately — independent of tx data
+          if (bnHex) {
+            const bnReal = parseInt(bnHex, 16);
+            if (bnReal > lastBlock.current) { lastBlock.current = bnReal; setBlockNumber(bnReal); }
+          }
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const d = await r.json();
           if (killed) return;
@@ -295,19 +316,40 @@ export default function useGenLayer() {
         const maxBlock = entries.reduce((m, e) => Math.max(m, e.blockNumber || 0), lastBlock.current);
         if (maxBlock > lastBlock.current) { lastBlock.current = maxBlock; setBlockNumber(maxBlock); }
 
-        // Split new vs existing
+        // Split new vs existing using sliding-window Map (no re-injection on prune)
         const newEntries = entries.filter(e => !seenHashes.current.has(e.hash));
-        newEntries.forEach(e => seenHashes.current.add(e.hash));
-        // CRIT-03: prune oldest entries to prevent unbounded memory growth
+        newEntries.forEach(e => {
+          seenHashes.current.set(e.hash, ++seenCounter.current);
+        });
+        // Evict oldest entries when Map exceeds 200 (by insertion order)
         if (seenHashes.current.size > 200) {
-          Array.from(seenHashes.current).slice(0, 100).forEach(h => seenHashes.current.delete(h));
+          const cutoff = seenCounter.current - 200;
+          for (const [h, ord] of seenHashes.current) {
+            if (ord <= cutoff) seenHashes.current.delete(h);
+          }
         }
 
-        // Atomic feed update: add new at top + refresh status of existing
+        // Build O(1) lookup map from incoming entries
+        const entriesMap = new Map(entries.map(e => [e.hash, e]));
+
+        // Atomic feed update: add new at top + refresh status of existing.
+        // Skip entirely when nothing changed to avoid a re-render on every WS block.
         setTxFeed(prev => {
           const base = Array.isArray(prev) ? prev : [];
+          // Fast-path: no new entries — only update if any status/stageIdx changed
+          if (newEntries.length === 0) {
+            let dirty = false;
+            const refreshed = base.map(t => {
+              const fresh = entriesMap.get(t.hash);
+              if (!fresh) return t;
+              if (fresh.status === t.status && fresh.stageIdx === t.stageIdx) return t;
+              dirty = true;
+              return { ...t, status: fresh.status, stageIdx: fresh.stageIdx, validators: fresh.validators, agreementLevel: fresh.agreementLevel, eqMismatch: fresh.eqMismatch, enrichmentData: fresh.enrichmentData, executionResult: fresh.executionResult };
+            });
+            return dirty ? refreshed.slice(0, 30) : prev; // return prev ref if nothing changed
+          }
           const refreshed = base.map(t => {
-            const fresh = entries.find(e => e.hash === t.hash);
+            const fresh = entriesMap.get(t.hash);
             if (!fresh) return t;
             return { ...t, status: fresh.status, stageIdx: fresh.stageIdx, validators: fresh.validators, agreementLevel: fresh.agreementLevel, eqMismatch: fresh.eqMismatch, enrichmentData: fresh.enrichmentData, executionResult: fresh.executionResult };
           });
@@ -383,13 +425,18 @@ export default function useGenLayer() {
     };
     connectWS();
 
+    // Page Visibility API: pause polling when tab is hidden, resume on visible.
+    const onVisChange = () => { if (!document.hidden) poll(); };
+    document.addEventListener('visibilitychange', onVisChange);
+
     // Initial poll + 5 s interval as fallback (fires even when WS is healthy
     // so stale data never accumulates if a subscription frame is missed)
     poll();
-    const tid = setInterval(poll, 5000);
+    const tid = setInterval(() => { if (!document.hidden) poll(); }, 5000);
     return () => {
       killed = true;
       clearInterval(tid);
+      document.removeEventListener('visibilitychange', onVisChange);
       if (wsReconnectTid) clearTimeout(wsReconnectTid);
       if (ws) { ws.onmessage = null; ws.onerror = null; ws.onclose = null; try { ws.close(); } catch {} }
     };
@@ -422,27 +469,37 @@ export default function useGenLayer() {
     let killed = false;
     const stdInFlight = { current: false };
     const poll = async () => {
-      if (killed || stdInFlight.current) return;
+      if (killed || stdInFlight.current || document.hidden) return;
       stdInFlight.current = true;
       try {
         const r = await fetchWithTimeout(`${STANDARD_API}/transactions?limit=50`, 8000);
         if (!r.ok || killed) return;
         const d = await r.json();
         if (!killed && Array.isArray(d?.items)) {
-          setStandardTxs(d.items.map(mapStandardTx));
+          const mapped = d.items.map(mapStandardTx);
+          setStandardTxs(prev => {
+            // Skip state update if hash list is identical (no re-render on stale poll)
+            if (Array.isArray(prev) && prev.length === mapped.length &&
+                prev.every((t, i) => t.hash === mapped[i].hash && t.status === mapped[i].status)) {
+              return prev;
+            }
+            return mapped;
+          });
           // Queue detail fetches for newly seen hashes only (batch, throttled)
           const newDetailHashes = d.items
             .map(item => item.hash)
             .filter(h => h && !seenDetailHashes.current.has(h));
           if (newDetailHashes.length > 0) {
             newDetailHashes.forEach(h => {
-              seenDetailHashes.current.add(h);
+              seenDetailHashes.current.set(h, ++seenDetailCounter.current);
               detailFetchQueue.current.push(h);
             });
-            // Prune seenDetailHashes to prevent unbounded growth
+            // Evict oldest entries (sliding window — no re-injection on prune)
             if (seenDetailHashes.current.size > 200) {
-              Array.from(seenDetailHashes.current).slice(0, 100)
-                .forEach(h => seenDetailHashes.current.delete(h));
+              const cutoff = seenDetailCounter.current - 200;
+              for (const [h, ord] of seenDetailHashes.current) {
+                if (ord <= cutoff) seenDetailHashes.current.delete(h);
+              }
             }
             processDetailQueue();
           }
@@ -454,10 +511,17 @@ export default function useGenLayer() {
         stdInFlight.current = false;
       }
     };
+
+    const onVisChange = () => { if (!document.hidden) poll(); };
+    document.addEventListener('visibilitychange', onVisChange);
     poll();
-    const tid = setInterval(poll, 5000);
-    return () => { killed = true; clearInterval(tid); };
-  }, []);
+    const tid = setInterval(() => { if (!document.hidden) poll(); }, 5000);
+    return () => {
+      killed = true;
+      clearInterval(tid);
+      document.removeEventListener('visibilitychange', onVisChange);
+    };
+  }, [processDetailQueue]);
 
   return {
     txFeed, toggleExpand,
