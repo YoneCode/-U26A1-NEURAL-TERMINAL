@@ -49,9 +49,8 @@ class HuntOracle(gl.Contract):
         """
         Fetches live Bradbury network congestion via gl.get_webpage().
         All 5 validators must reach consensus on the result before state updates.
-        This is an owner-only write — never called from the browser.
+        Public — any caller may refresh the oracle (data is read from a public API).
         """
-        self._only_owner()
 
         # ── Fetch pending transactions ─────────────────────────────────────────
         pending = 0
