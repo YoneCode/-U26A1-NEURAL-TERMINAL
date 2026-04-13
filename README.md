@@ -141,7 +141,7 @@ pressure from the burner wallet.
 
 **View:** `get_oracle()` → `{ threat_level, pending_count, validator_count, last_epoch, batch_multiplier }`
 
-**Explorer:** [explorer-bradbury.genlayer.com/address/0xe91b073066dE06901A831d2aE635Ab53BBFe866b](https://explorer-bradbury.genlayer.com/address/0xe91b073066dE06901A831d2aE635Ab53BBFe866b)
+**Explorer:** [explorer-bradbury.genlayer.com/address/0x3DE293D682261ce806f2Fa072B055D42eC8737AA](https://explorer-bradbury.genlayer.com/address/0x3DE293D682261ce806f2Fa072B055D42eC8737AA)
 
 ---
 
