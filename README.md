@@ -1,6 +1,6 @@
 #-U26A1 NEURAL TERMINAL
 
-A live split-panel blockchain explorer for the [GenLayer Bradbury testnet](https://explorer-bradbury.genlayer.com).
+A live split-panel blockchain explorer for the [GenLayer Bradbury testnet](https://explorer-bradbury.genlayer.com). 
 The left panel is an IDE-style terminal showing real transactions, validator state, epochs, and
 network analytics. The right panel is a full-bleed canvas where an IK creature — **⚡ Lizard** — hunts
 failed and rejected transactions rendered as colour-coded particles, writing every confirmed kill
